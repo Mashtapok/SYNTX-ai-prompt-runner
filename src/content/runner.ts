@@ -25,11 +25,13 @@ export interface RunnerActions {
     sceneNumber: number,
     onComplete: (durationMs: number) => void,
     onDownload: (result: ImageDownloadResult) => void,
+    onGenerationError: (message: string) => void,
     shouldStop: () => boolean
   ): (() => void) | void;
   stopGenerationTracking?(): void;
   cancelGenerationIdleWait?(): void;
   notifyRateLimit?(sceneNumber: number): void | Promise<void>;
+  notifyGenerationError?(sceneNumber: number): void | Promise<void>;
   notifyWhenGenerationsComplete?(sceneCount: number, shouldStop: () => boolean): void;
   reloadPage(): void;
   sleep(ms: number, shouldStop: () => boolean): Promise<"done" | "stopped">;
@@ -40,6 +42,9 @@ export class PromptRunner {
   private pauseRequested = false;
   private stopRequested = false;
   private logQueue: Promise<void> = Promise.resolve();
+  private generationRetryQueue: number[] = [];
+  private queuedGenerationRetries = new Set<number>();
+  private generationRetryWorker: Promise<void> | null = null;
 
   constructor(
     private readonly area: StorageAreaLike,
@@ -101,6 +106,7 @@ export class PromptRunner {
       return continued;
     }
 
+    this.clearGenerationRetryQueue();
     this.actions.stopGenerationTracking?.();
     await clearLogs(this.area);
     const state = createActiveState(batch, mode, 0, this.actions.now());
@@ -169,6 +175,7 @@ export class PromptRunner {
 
   async stop(): Promise<RunState> {
     this.stopRequested = true;
+    this.clearGenerationRetryQueue();
     this.actions.stopGenerationTracking?.();
     const state = freezeRuntime(await loadRunState(this.area), this.actions.now());
     const stopped = {
@@ -220,17 +227,32 @@ export class PromptRunner {
       const batch = await requireBatch(this.area);
       const settings = await loadSettings(this.area);
       const maxExclusive = getMaxExclusive(batch, initialState.mode);
-      let index = state.pendingRetry?.sceneIndex ?? state.currentIndex;
 
-      while (index < maxExclusive) {
+      if (state.pendingRetry?.kind === "generation") {
+        this.enqueueGenerationRetry(state.pendingRetry.sceneIndex);
+      }
+
+      let index =
+        state.pendingRetry?.kind === "generation"
+          ? state.currentIndex
+          : (state.pendingRetry?.sceneIndex ?? state.currentIndex);
+
+      while (index < maxExclusive || this.hasQueuedGenerationRetries()) {
         if (this.stopRequested) {
           await this.stop();
           return;
         }
 
-        const scene = batch.scenes[index];
+        const queuedRetryIndex = this.shiftGenerationRetry();
+        const isGenerationRetry = queuedRetryIndex !== null;
+        const sceneIndex = queuedRetryIndex ?? index;
+        const scene = batch.scenes[sceneIndex];
 
         if (!scene) {
+          if (isGenerationRetry) {
+            continue;
+          }
+
           await this.complete(state, initialState.mode === "test");
           return;
         }
@@ -238,10 +260,10 @@ export class PromptRunner {
         state = {
           ...state,
           status: "running",
-          currentIndex: index,
+          currentIndex: isGenerationRetry ? Math.min(index, batch.sceneCount) : sceneIndex,
           totalScenes: batch.sceneCount,
           errorMessage: null,
-          message: null
+          message: isGenerationRetry ? `Retrying scene ${scene.sceneNumber}.` : null
         };
         await saveRunState(state, this.area);
 
@@ -265,6 +287,7 @@ export class PromptRunner {
                     void this.saveGenerationStats(durationMs);
                   },
                   (result) => void this.logDownloadResult(scene.sceneNumber, result),
+                  (message) => void this.handleGenerationError(sceneIndex, scene.sceneNumber, message),
                   () => this.stopRequested
                 );
           let rateLimited = false;
@@ -280,7 +303,7 @@ export class PromptRunner {
             state = {
               ...state,
               status: "waiting",
-              currentIndex: index,
+              currentIndex: isGenerationRetry ? state.currentIndex : sceneIndex,
               errorMessage: null,
               message
             };
@@ -309,6 +332,10 @@ export class PromptRunner {
           await rateLimitReport;
 
           if (rateLimited) {
+            if (isGenerationRetry) {
+              this.requeueGenerationRetry(sceneIndex);
+            }
+
             if (this.pauseRequested) {
               await this.pauseNow(state);
               return;
@@ -317,20 +344,30 @@ export class PromptRunner {
             continue;
           }
         } catch (error) {
-          await this.handleSceneError(state, scene.sceneNumber, index, toHumanMessage(error));
+          await this.handleSceneError(state, scene.sceneNumber, sceneIndex, isGenerationRetry, toHumanMessage(error));
           return;
         }
 
-        state = {
-          ...state,
-          lastCompletedIndex: index,
-          currentIndex: index + 1,
-          pendingRetry: undefined
-        };
-        await saveRunState(state, this.area);
-        await this.writeLog(scene.sceneNumber, "Success");
+        if (isGenerationRetry) {
+          state = {
+            ...state,
+            pendingRetry: undefined,
+            message: null
+          };
+        } else {
+          state = {
+            ...state,
+            lastCompletedIndex: sceneIndex,
+            currentIndex: sceneIndex + 1,
+            pendingRetry: undefined
+          };
+          index = sceneIndex + 1;
+        }
 
-        if (index + 1 >= maxExclusive) {
+        await saveRunState(state, this.area);
+        await this.writeLog(scene.sceneNumber, "Success", isGenerationRetry ? "Retry submitted." : undefined);
+
+        if (index >= maxExclusive && !this.hasQueuedGenerationRetries()) {
           await this.complete(state, initialState.mode === "test");
           return;
         }
@@ -339,13 +376,15 @@ export class PromptRunner {
           await this.pauseNow(state);
           return;
         }
-
-        index += 1;
       }
 
       await this.complete(state, initialState.mode === "test");
     } finally {
       this.running = false;
+
+      if (this.hasQueuedGenerationRetries() && !this.stopRequested && !this.pauseRequested) {
+        this.startGenerationRetryWorker();
+      }
     }
   }
 
@@ -365,6 +404,122 @@ export class PromptRunner {
     return result.status === "started"
       ? this.writeLog(sceneNumber, "Info", "Image download started.")
       : this.writeLog(sceneNumber, "Error", result.message);
+  }
+
+  private async handleGenerationError(sceneIndex: number, sceneNumber: number, message: string): Promise<void> {
+    if (this.stopRequested) {
+      return;
+    }
+
+    this.actions.cancelGenerationIdleWait?.();
+    const queued = this.enqueueGenerationRetry(sceneIndex);
+
+    if (!queued) {
+      return;
+    }
+
+    await this.writeLog(sceneNumber, "Error", message);
+    await this.actions.notifyGenerationError?.(sceneNumber);
+
+    if (!this.running) {
+      this.startGenerationRetryWorker();
+    }
+  }
+
+  private enqueueGenerationRetry(sceneIndex: number): boolean {
+    if (this.queuedGenerationRetries.has(sceneIndex)) {
+      return false;
+    }
+
+    this.queuedGenerationRetries.add(sceneIndex);
+    this.generationRetryQueue.push(sceneIndex);
+    return true;
+  }
+
+  private requeueGenerationRetry(sceneIndex: number): void {
+    if (this.queuedGenerationRetries.has(sceneIndex)) {
+      return;
+    }
+
+    this.queuedGenerationRetries.add(sceneIndex);
+    this.generationRetryQueue.unshift(sceneIndex);
+  }
+
+  private shiftGenerationRetry(): number | null {
+    const next = this.generationRetryQueue.shift();
+
+    if (next === undefined) {
+      return null;
+    }
+
+    this.queuedGenerationRetries.delete(next);
+    return next;
+  }
+
+  private hasQueuedGenerationRetries(): boolean {
+    return this.generationRetryQueue.length > 0;
+  }
+
+  private clearGenerationRetryQueue(): void {
+    this.generationRetryQueue = [];
+    this.queuedGenerationRetries.clear();
+  }
+
+  private startGenerationRetryWorker(): void {
+    if (this.running || this.generationRetryWorker || this.pauseRequested || !this.hasQueuedGenerationRetries()) {
+      return;
+    }
+
+    this.generationRetryWorker = this.runQueuedGenerationRetries()
+      .catch((error) => this.writeLog(null, "Error", toHumanMessage(error)))
+      .finally(() => {
+        this.generationRetryWorker = null;
+
+        if (this.hasQueuedGenerationRetries() && !this.running && !this.stopRequested && !this.pauseRequested) {
+          this.startGenerationRetryWorker();
+        }
+      });
+  }
+
+  private async runQueuedGenerationRetries(): Promise<void> {
+    const batch = await requireBatch(this.area);
+    const state = await loadRunState(this.area);
+
+    if (state.status === "stopped" || state.status === "error") {
+      return;
+    }
+
+    const validation = this.actions.validatePage();
+
+    if (!validation.ok) {
+      const message = validation.errors[0] ?? "Unable to continue.";
+      const failed = {
+        ...freezeRuntime(state, this.actions.now()),
+        status: "error" as const,
+        totalScenes: batch.sceneCount,
+        batchId: batch.id,
+        errorMessage: message,
+        message
+      };
+      await saveRunState(failed, this.area);
+      await this.writeLog(null, "Error", message);
+      return;
+    }
+
+    const retrying = resumeRuntime(
+      {
+        ...state,
+        status: "running",
+        totalScenes: batch.sceneCount,
+        batchId: batch.id,
+        errorMessage: null,
+        pendingRetry: undefined,
+        message: "Retrying failed generation."
+      },
+      this.actions.now()
+    );
+    await saveRunState(retrying, this.area);
+    await this.runFromState(retrying);
   }
 
   private writeLog(
@@ -387,17 +542,24 @@ export class PromptRunner {
     await this.actions.notifyRateLimit?.(sceneNumber);
   }
 
-  private async handleSceneError(state: RunState, sceneNumber: number, sceneIndex: number, message: string): Promise<void> {
+  private async handleSceneError(
+    state: RunState,
+    sceneNumber: number,
+    sceneIndex: number,
+    isGenerationRetry: boolean,
+    message: string
+  ): Promise<void> {
     const attempts = state.pendingRetry?.sceneIndex === sceneIndex ? state.pendingRetry.attempts : 0;
 
     if (attempts < 1) {
       const retrying: RunState = {
         ...state,
         status: "retrying",
-        currentIndex: sceneIndex,
+        currentIndex: isGenerationRetry ? state.currentIndex : sceneIndex,
         pendingRetry: {
           sceneIndex,
-          attempts: attempts + 1
+          attempts: attempts + 1,
+          kind: isGenerationRetry ? "generation" : "scene"
         },
         errorMessage: message,
         message: "Reload page"

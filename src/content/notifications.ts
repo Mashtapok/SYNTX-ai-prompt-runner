@@ -18,6 +18,15 @@ export async function notifyRateLimit(sceneNumber: number): Promise<void> {
   });
 }
 
+export async function notifyGenerationError(sceneNumber: number): Promise<void> {
+  await showNotification({
+    id: `generation-error-${sceneNumber}-${Date.now()}`,
+    title: "SynteX: ошибка генерации",
+    message: `Ошибка генерации на сцене ${sceneNumber}. Промпт будет отправлен заново.`,
+    requireInteraction: true
+  });
+}
+
 function completedScenesMessage(sceneCount: number): string {
   const lastTwo = sceneCount % 100;
   const last = sceneCount % 10;

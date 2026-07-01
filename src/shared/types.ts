@@ -41,6 +41,7 @@ export interface LearningSelectors {
 export interface PendingRetry {
   sceneIndex: number;
   attempts: number;
+  kind?: "scene" | "generation";
 }
 
 export interface RunState {

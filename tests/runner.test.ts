@@ -169,6 +169,119 @@ describe("PromptRunner", () => {
     });
   });
 
+  it("retries the original scene after a late generation error", async () => {
+    const area = new MemoryStorageArea();
+    const submitted: string[] = [];
+    const notifyGenerationError = vi.fn();
+    const cancelGenerationIdleWait = vi.fn();
+    let firstGenerationError: (message: string) => void = () => undefined;
+    let generationErrorCaptured = false;
+    await saveBatch(makeBatch(2), area);
+    await saveSettings({ intervalSec: 1 }, area);
+
+    const runner = new PromptRunner(area, {
+      ...baseActions(),
+      submitPrompt: (prompt) => {
+        submitted.push(prompt);
+      },
+      trackGenerationFromSnapshot: (_snapshot, sceneNumber, _onComplete, _onDownload, onGenerationError) => {
+        if (sceneNumber === 1 && !generationErrorCaptured) {
+          generationErrorCaptured = true;
+          firstGenerationError = onGenerationError;
+        }
+      },
+      notifyGenerationError,
+      cancelGenerationIdleWait,
+      sleep: async () => "done"
+    });
+
+    await runner.start("full");
+
+    await vi.waitFor(async () => {
+      expect((await loadRunState(area)).status).toBe("completed");
+    });
+
+    expect(generationErrorCaptured).toBe(true);
+    firstGenerationError("Generation failed. Retrying scene.");
+
+    await vi.waitFor(() => {
+      expect(submitted).toEqual([
+        "СЦЕНА 1 — ПРОМПТ:\nPrompt 1",
+        "СЦЕНА 2 — ПРОМПТ:\nPrompt 2",
+        "СЦЕНА 1 — ПРОМПТ:\nPrompt 1"
+      ]);
+    });
+
+    await vi.waitFor(async () => {
+      expect(await loadLogs(area)).toMatchObject([
+        { sceneNumber: 1, status: "Success" },
+        { sceneNumber: 2, status: "Success" },
+        { sceneNumber: 1, status: "Error", message: "Generation failed. Retrying scene." },
+        { sceneNumber: 1, status: "Success", message: "Retry submitted." }
+      ]);
+    });
+    expect(await loadRunState(area)).toMatchObject({ status: "completed", lastCompletedIndex: 1 });
+    expect(notifyGenerationError).toHaveBeenCalledWith(1);
+    expect(cancelGenerationIdleWait).toHaveBeenCalled();
+  });
+
+  it("preserves the main checkpoint when a late retry needs a page reload", async () => {
+    const area = new MemoryStorageArea();
+    const reloadPage = vi.fn();
+    let firstGenerationError: (message: string) => void = () => undefined;
+    let generationErrorCaptured = false;
+    let failNextRetry = false;
+    await saveBatch(makeBatch(2), area);
+    await saveSettings({ intervalSec: 1 }, area);
+
+    const runner = new PromptRunner(area, {
+      ...baseActions(),
+      submitPrompt: (prompt) => {
+        if (failNextRetry && prompt.startsWith("СЦЕНА 1")) {
+          failNextRetry = false;
+          throw new Error("Prompt field not found.");
+        }
+      },
+      trackGenerationFromSnapshot: (_snapshot, sceneNumber, _onComplete, _onDownload, onGenerationError) => {
+        if (sceneNumber === 1 && !generationErrorCaptured) {
+          generationErrorCaptured = true;
+          firstGenerationError = onGenerationError;
+        }
+      },
+      reloadPage,
+      sleep: async () => "done"
+    });
+
+    await runner.start("full");
+
+    await vi.waitFor(async () => {
+      expect((await loadRunState(area)).status).toBe("completed");
+    });
+
+    failNextRetry = true;
+    firstGenerationError("Generation failed. Retrying scene.");
+
+    await vi.waitFor(async () => {
+      expect(await loadRunState(area)).toMatchObject({
+        status: "retrying",
+        currentIndex: 2,
+        lastCompletedIndex: 1,
+        pendingRetry: { sceneIndex: 0, attempts: 1, kind: "generation" }
+      });
+    });
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+
+    await runner.resumeAfterReload();
+
+    await vi.waitFor(async () => {
+      expect(await loadRunState(area)).toMatchObject({
+        status: "completed",
+        currentIndex: 2,
+        lastCompletedIndex: 1
+      });
+    });
+  });
+
   it("waits interval and retries the same scene after a 429 rate limit", async () => {
     const area = new MemoryStorageArea();
     let submitAttempts = 0;

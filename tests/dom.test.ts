@@ -136,7 +136,7 @@ describe("content DOM adapter", () => {
       const oldDownload = vi.fn();
       document.querySelector("#old-download")?.addEventListener("click", oldDownload);
 
-      tracker.trackNext(snapshot, 1, complete, downloadResult, () => false);
+      tracker.trackNext(snapshot, 1, complete, downloadResult, () => undefined, () => false);
       await vi.advanceTimersByTimeAsync(10);
 
       const fresh = document.createElement("div");
@@ -173,7 +173,7 @@ describe("content DOM adapter", () => {
     try {
       const snapshot = tracker.capture();
       const idle = vi.fn();
-      tracker.trackNext(snapshot, 1, () => undefined, () => undefined, () => false);
+      tracker.trackNext(snapshot, 1, () => undefined, () => undefined, () => undefined, () => false);
       tracker.waitForIdle(idle);
 
       const skeleton = document.createElement("div");
@@ -208,7 +208,7 @@ describe("content DOM adapter", () => {
     try {
       const snapshot = tracker.capture();
       const downloadResult = vi.fn();
-      tracker.trackNext(snapshot, 1, () => undefined, downloadResult, () => false);
+      tracker.trackNext(snapshot, 1, () => undefined, downloadResult, () => undefined, () => false);
 
       const skeleton = document.createElement("div");
       skeleton.className = "el-skeleton__item el-skeleton__image bot-image-item__skeleton";
@@ -219,6 +219,46 @@ describe("content DOM adapter", () => {
       await vi.advanceTimersByTimeAsync(40);
 
       expect(downloadResult).toHaveBeenCalledWith({ status: "error", message: "Image download button not found." });
+    } finally {
+      tracker.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a generation error from the matching message", async () => {
+    vi.useFakeTimers();
+    const tracker = new SkeletonTracker(document, {
+      appearTimeoutMs: 100,
+      disappearTimeoutMs: 1000,
+      pollMs: 10
+    });
+
+    try {
+      const snapshot = tracker.capture();
+      const complete = vi.fn();
+      const downloadResult = vi.fn();
+      const generationError = vi.fn();
+      const message = document.createElement("section");
+      const skeleton = document.createElement("div");
+      message.className = "chat-message";
+      skeleton.className = "el-skeleton__item el-skeleton__image bot-image-item__skeleton";
+
+      tracker.trackNext(snapshot, 70, complete, downloadResult, generationError, () => false);
+      message.append(skeleton);
+      document.body.append(message);
+      await vi.advanceTimersByTimeAsync(10);
+
+      const alert = document.createElement("div");
+      alert.className = "el-alert el-alert--error message-error";
+      alert.setAttribute("role", "alert");
+      alert.textContent = "An unexpected error occurred. Please try again later or contact support.";
+      message.append(alert);
+      skeleton.remove();
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(generationError).toHaveBeenCalledWith("Generation failed. Retrying scene.");
+      expect(complete).not.toHaveBeenCalled();
+      expect(downloadResult).not.toHaveBeenCalled();
     } finally {
       tracker.stop();
       vi.useRealTimers();
@@ -236,7 +276,7 @@ describe("content DOM adapter", () => {
       firstMessage.append(firstSkeleton);
 
       const firstSnapshot = tracker.capture();
-      tracker.trackNext(firstSnapshot, 1, () => undefined, () => undefined, () => false);
+      tracker.trackNext(firstSnapshot, 1, () => undefined, () => undefined, () => undefined, () => false);
       document.body.append(firstMessage);
       await vi.advanceTimersByTimeAsync(10);
 
@@ -246,7 +286,7 @@ describe("content DOM adapter", () => {
       secondMessage.append(secondSkeleton);
 
       const secondSnapshot = tracker.capture();
-      tracker.trackNext(secondSnapshot, 1, () => undefined, () => undefined, () => false);
+      tracker.trackNext(secondSnapshot, 1, () => undefined, () => undefined, () => undefined, () => false);
       document.body.append(secondMessage);
       await vi.advanceTimersByTimeAsync(10);
 
@@ -292,7 +332,7 @@ describe("content DOM adapter", () => {
       document.body.append(message);
 
       const snapshot = tracker.capture();
-      tracker.trackNext(snapshot, 1, () => undefined, () => undefined, () => false);
+      tracker.trackNext(snapshot, 1, () => undefined, () => undefined, () => undefined, () => false);
       message.prepend(skeleton);
       await vi.advanceTimersByTimeAsync(10);
 

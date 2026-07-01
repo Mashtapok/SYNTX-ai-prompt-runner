@@ -25,6 +25,8 @@ const GENERATE_SELECTORS = [
 const GENERATE_TEXT = ["generate", "сгенер", "создать", "отправ", "submit", "send"];
 const IMAGE_SKELETON_SELECTOR = ".el-skeleton__item.el-skeleton__image.bot-image-item__skeleton";
 const DOWNLOAD_BUTTON_SELECTOR = 'button[data-cy="download-file-btn"]';
+const GENERATION_ERROR_SELECTOR = ".message-error, .el-alert.el-alert--error[role='alert'], [role='alert'].el-alert--error";
+const MESSAGE_ROOT_SELECTOR = ".chat-message, .bot-image-message";
 
 export interface PromptTarget {
   element: HTMLElement;
@@ -287,16 +289,18 @@ export class SkeletonTracker {
     sceneNumber: number,
     onComplete: (durationMs: number) => void,
     onDownload: (result: ImageDownloadResult) => void,
+    onGenerationError: (message: string) => void,
     shouldStop: () => boolean
   ): () => void {
     const appearTimeoutMs = this.options.appearTimeoutMs ?? 15000;
-    const disappearTimeoutMs = this.options.disappearTimeoutMs ?? 20 * 60 * 1000;
+    const disappearTimeoutMs = this.options.disappearTimeoutMs ?? 60 * 60 * 1000;
     const downloadTimeoutMs = this.options.downloadTimeoutMs ?? 15000;
     const pollMs = this.options.pollMs ?? 500;
     let target: HTMLElement | null = null;
+    let targetRoot: HTMLElement | null = null;
     let targetAncestors: HTMLElement[] = [];
     let startedAt = 0;
-    let completedAt: number | null = null;
+    let skeletonEndedAt: number | null = null;
     let stopped = false;
     let interval = 0;
 
@@ -314,21 +318,21 @@ export class SkeletonTracker {
 
     const selectTarget = (element: HTMLElement, now: number): void => {
       target = element;
+      targetRoot = findMessageRoot(element);
       targetAncestors = collectAncestors(element);
       startedAt = now;
       this.tracked.add(element);
       console.log("[SynteX Runner] Image skeleton tracked", { submittedAt: snapshot.submittedAt });
     };
 
-    const completeGeneration = (now: number): void => {
-      if (!target || completedAt !== null) {
+    const markSkeletonEnded = (now: number): void => {
+      if (!target || skeletonEndedAt !== null) {
         return;
       }
 
-      completedAt = now;
+      skeletonEndedAt = now;
       const durationMs = now - startedAt;
       console.log("[SynteX Runner] Image skeleton disappeared", { durationMs });
-      onComplete(durationMs);
     };
 
     const startDownload = (): boolean => {
@@ -346,6 +350,7 @@ export class SkeletonTracker {
       this.claimedDownloadButtons.add(button);
 
       try {
+        onComplete((skeletonEndedAt ?? Date.now()) - startedAt);
         void chrome.runtime
           .sendMessage({ type: "REGISTER_DOWNLOAD_NAME", sceneNumber } satisfies BackgroundRequest)
           .catch(() => undefined);
@@ -358,6 +363,12 @@ export class SkeletonTracker {
 
       cleanup();
       return true;
+    };
+
+    const failGeneration = (message: string): void => {
+      console.warn("[SynteX Runner] Generation error detected", { submittedAt: snapshot.submittedAt, message });
+      onGenerationError(message);
+      cleanup();
     };
 
     const timeout = (): void => {
@@ -380,16 +391,23 @@ export class SkeletonTracker {
         return false;
       }
 
-      if (completedAt === null && !isActiveSkeleton(target)) {
-        completeGeneration(now);
+      const errorMessage = findGenerationError(targetRoot);
+
+      if (errorMessage) {
+        failGeneration(errorMessage);
+        return true;
       }
 
-      if (completedAt !== null) {
+      if (skeletonEndedAt === null && !isActiveSkeleton(target)) {
+        markSkeletonEnded(now);
+      }
+
+      if (skeletonEndedAt !== null) {
         if (startDownload()) {
           return true;
         }
 
-        if (now - completedAt >= downloadTimeoutMs) {
+        if (now - skeletonEndedAt >= downloadTimeoutMs) {
           console.warn("[SynteX Runner] Image download button not found", { submittedAt: snapshot.submittedAt });
           onDownload({ status: "error", message: "Image download button not found." });
           cleanup();
@@ -510,6 +528,24 @@ function collectAncestors(element: HTMLElement): HTMLElement[] {
   }
 
   return ancestors;
+}
+
+function findMessageRoot(element: HTMLElement): HTMLElement | null {
+  return element.closest<HTMLElement>(MESSAGE_ROOT_SELECTOR);
+}
+
+function findGenerationError(root: HTMLElement | null): string | null {
+  if (!root?.isConnected) {
+    return null;
+  }
+
+  const error = root.querySelector<HTMLElement>(GENERATION_ERROR_SELECTOR);
+
+  if (!error || !isVisible(error)) {
+    return null;
+  }
+
+  return "Generation failed. Retrying scene.";
 }
 
 function findDownloadButton(

@@ -1,6 +1,6 @@
 import { SkeletonTracker, submitPrompt, validatePage, type SkeletonSnapshot } from "./dom";
 import { resetLearning, startLearning } from "./learning";
-import { notifyRateLimit, notifyRunCompleted } from "./notifications";
+import { notifyGenerationError, notifyRateLimit, notifyRunCompleted } from "./notifications";
 import { clearRateLimitSignal, takeRateLimitSignal, watchRateLimitSignal } from "./rateLimit";
 import { PromptRunner, type RunnerActions } from "./runner";
 import { toHumanMessage } from "../shared/errors";
@@ -21,11 +21,19 @@ const actions: RunnerActions = {
   watchRateLimitSignal,
   submitPrompt: (prompt) => submitPrompt(prompt, document, learnedSelectors),
   captureGenerationSnapshot: () => skeletonTracker.capture(),
-  trackGenerationFromSnapshot: (snapshot, sceneNumber, onComplete, onDownload, shouldStop) =>
-    skeletonTracker.trackNext(snapshot as SkeletonSnapshot, sceneNumber, onComplete, onDownload, shouldStop),
+  trackGenerationFromSnapshot: (snapshot, sceneNumber, onComplete, onDownload, onGenerationError, shouldStop) =>
+    skeletonTracker.trackNext(
+      snapshot as SkeletonSnapshot,
+      sceneNumber,
+      onComplete,
+      onDownload,
+      onGenerationError,
+      shouldStop
+    ),
   stopGenerationTracking: () => skeletonTracker.stop(),
   cancelGenerationIdleWait: () => skeletonTracker.stopIdleWaits(),
   notifyRateLimit,
+  notifyGenerationError,
   notifyWhenGenerationsComplete: (sceneCount, shouldStop) => {
     skeletonTracker.waitForIdle(() => void notifyRunCompleted(sceneCount), shouldStop);
   },
