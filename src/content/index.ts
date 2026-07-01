@@ -21,8 +21,8 @@ const actions: RunnerActions = {
   watchRateLimitSignal,
   submitPrompt: (prompt) => submitPrompt(prompt, document, learnedSelectors),
   captureGenerationSnapshot: () => skeletonTracker.capture(),
-  trackGenerationFromSnapshot: (snapshot, onComplete, onDownload, shouldStop) =>
-    skeletonTracker.trackNext(snapshot as SkeletonSnapshot, onComplete, onDownload, shouldStop),
+  trackGenerationFromSnapshot: (snapshot, sceneNumber, onComplete, onDownload, shouldStop) =>
+    skeletonTracker.trackNext(snapshot as SkeletonSnapshot, sceneNumber, onComplete, onDownload, shouldStop),
   stopGenerationTracking: () => skeletonTracker.stop(),
   cancelGenerationIdleWait: () => skeletonTracker.stopIdleWaits(),
   notifyRateLimit,

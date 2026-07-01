@@ -124,7 +124,7 @@ describe("PromptRunner", () => {
     const runner = new PromptRunner(area, {
       ...baseActions(),
       captureGenerationSnapshot: () => snapshot,
-      trackGenerationFromSnapshot: (receivedSnapshot, onComplete) => {
+      trackGenerationFromSnapshot: (receivedSnapshot, _sceneNumber, onComplete) => {
         expect(receivedSnapshot).toBe(snapshot);
         onGenerationComplete = onComplete;
       },
@@ -150,7 +150,7 @@ describe("PromptRunner", () => {
 
     const runner = new PromptRunner(area, {
       ...baseActions(),
-      trackGenerationFromSnapshot: (_snapshot, _onComplete, receivedOnDownload) => {
+      trackGenerationFromSnapshot: (_snapshot, _sceneNumber, _onComplete, receivedOnDownload) => {
         onDownload = receivedOnDownload;
       },
       sleep: async () => {

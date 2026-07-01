@@ -1,5 +1,5 @@
 import { HumanError } from "../shared/errors";
-import type { ImageDownloadResult, LearningSelectors, PageValidation } from "../shared/types";
+import type { BackgroundRequest, ImageDownloadResult, LearningSelectors, PageValidation } from "../shared/types";
 
 const PROMPT_SELECTORS = [
   'textarea[placeholder*="prompt" i]',
@@ -284,6 +284,7 @@ export class SkeletonTracker {
 
   trackNext(
     snapshot: SkeletonSnapshot,
+    sceneNumber: number,
     onComplete: (durationMs: number) => void,
     onDownload: (result: ImageDownloadResult) => void,
     shouldStop: () => boolean
@@ -345,6 +346,9 @@ export class SkeletonTracker {
       this.claimedDownloadButtons.add(button);
 
       try {
+        void chrome.runtime
+          .sendMessage({ type: "REGISTER_DOWNLOAD_NAME", sceneNumber } satisfies BackgroundRequest)
+          .catch(() => undefined);
         button.click();
         console.log("[SynteX Runner] Image download started", { submittedAt: snapshot.submittedAt });
         onDownload({ status: "started" });

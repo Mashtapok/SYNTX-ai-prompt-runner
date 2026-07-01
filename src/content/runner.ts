@@ -22,6 +22,7 @@ export interface RunnerActions {
   captureGenerationSnapshot?(): unknown;
   trackGenerationFromSnapshot?(
     snapshot: unknown,
+    sceneNumber: number,
     onComplete: (durationMs: number) => void,
     onDownload: (result: ImageDownloadResult) => void,
     shouldStop: () => boolean
@@ -254,6 +255,7 @@ export class PromptRunner {
               ? undefined
               : this.actions.trackGenerationFromSnapshot?.(
                   generationSnapshot,
+                  scene.sceneNumber,
                   (durationMs) => {
                     state = {
                       ...state,

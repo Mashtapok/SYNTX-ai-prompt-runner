@@ -13,6 +13,9 @@ import {
 describe("content DOM adapter", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
+    (globalThis as unknown as { chrome: unknown }).chrome = {
+      runtime: { sendMessage: vi.fn().mockResolvedValue(undefined) }
+    };
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
       x: 0,
       y: 500,
@@ -133,7 +136,7 @@ describe("content DOM adapter", () => {
       const oldDownload = vi.fn();
       document.querySelector("#old-download")?.addEventListener("click", oldDownload);
 
-      tracker.trackNext(snapshot, complete, downloadResult, () => false);
+      tracker.trackNext(snapshot, 1, complete, downloadResult, () => false);
       await vi.advanceTimersByTimeAsync(10);
 
       const fresh = document.createElement("div");
@@ -170,7 +173,7 @@ describe("content DOM adapter", () => {
     try {
       const snapshot = tracker.capture();
       const idle = vi.fn();
-      tracker.trackNext(snapshot, () => undefined, () => undefined, () => false);
+      tracker.trackNext(snapshot, 1, () => undefined, () => undefined, () => false);
       tracker.waitForIdle(idle);
 
       const skeleton = document.createElement("div");
@@ -205,7 +208,7 @@ describe("content DOM adapter", () => {
     try {
       const snapshot = tracker.capture();
       const downloadResult = vi.fn();
-      tracker.trackNext(snapshot, () => undefined, downloadResult, () => false);
+      tracker.trackNext(snapshot, 1, () => undefined, downloadResult, () => false);
 
       const skeleton = document.createElement("div");
       skeleton.className = "el-skeleton__item el-skeleton__image bot-image-item__skeleton";
@@ -233,7 +236,7 @@ describe("content DOM adapter", () => {
       firstMessage.append(firstSkeleton);
 
       const firstSnapshot = tracker.capture();
-      tracker.trackNext(firstSnapshot, () => undefined, () => undefined, () => false);
+      tracker.trackNext(firstSnapshot, 1, () => undefined, () => undefined, () => false);
       document.body.append(firstMessage);
       await vi.advanceTimersByTimeAsync(10);
 
@@ -243,7 +246,7 @@ describe("content DOM adapter", () => {
       secondMessage.append(secondSkeleton);
 
       const secondSnapshot = tracker.capture();
-      tracker.trackNext(secondSnapshot, () => undefined, () => undefined, () => false);
+      tracker.trackNext(secondSnapshot, 1, () => undefined, () => undefined, () => false);
       document.body.append(secondMessage);
       await vi.advanceTimersByTimeAsync(10);
 
@@ -289,7 +292,7 @@ describe("content DOM adapter", () => {
       document.body.append(message);
 
       const snapshot = tracker.capture();
-      tracker.trackNext(snapshot, () => undefined, () => undefined, () => false);
+      tracker.trackNext(snapshot, 1, () => undefined, () => undefined, () => false);
       message.prepend(skeleton);
       await vi.advanceTimersByTimeAsync(10);
 
