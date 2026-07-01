@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "SynteX Prompt Runner",
+  "description": "Internal prompt queue runner for prepared SynteX image generation pages.",
+  "version": "0.1.0",
+  "permissions": ["activeTab", "downloads", "notifications", "scripting", "storage", "unlimitedStorage", "webRequest"],
+  "host_permissions": ["https://syntx.ai/*", "https://*.syntx.ai/*"],
+  "background": {
+    "service_worker": "assets/background.js"
+  },
+  "icons": {
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_title": "SynteX Prompt Runner",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://syntx.ai/*", "https://*.syntx.ai/*"],
+      "js": ["assets/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

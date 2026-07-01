@@ -1,0 +1,32 @@
+{
+  "name": "syntx-prompt-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "npm run build:popup && npm run build:content && npm run build:background",
+    "build:popup": "vite build",
+    "build:content": "esbuild src/content/index.ts --bundle --format=iife --target=chrome114 --outfile=dist/assets/content.js",
+    "build:background": "esbuild src/background/index.ts --bundle --format=iife --target=chrome114 --outfile=dist/assets/background.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "lucide-react": "^1.21.0",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.28",
+    "@types/node": "^24.10.2",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "esbuild": "^0.27.1",
+    "jsdom": "^27.3.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vitest": "^4.0.16"
+  }
+}
